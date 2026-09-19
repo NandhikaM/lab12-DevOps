@@ -1,1 +1,1 @@
-server app-blue:3000;
+server app-green:3000;
