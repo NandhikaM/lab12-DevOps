@@ -2,7 +2,7 @@ pipeline {
   agent any
 
   environment {
-    DOCKERHUB_USER = 'YOUR_DOCKERHUB_USERNAME'          // <-- change this
+    DOCKERHUB_USER = 'nandhika1905'          // <-- change this
     IMAGE_NAME     = "${DOCKERHUB_USER}/bluegreen-node-app"
     IMAGE_TAG      = "${BUILD_NUMBER}"
     NETWORK        = 'bluegreen-net'
