@@ -1,0 +1,119 @@
+pipeline {
+  agent any
+
+  environment {
+    DOCKERHUB_USER = 'nandhika1905'
+    IMAGE_NAME     = "${DOCKERHUB_USER}/bluegreen-node-app"
+    IMAGE_TAG      = "${BUILD_NUMBER}"
+    NETWORK        = 'bluegreen-net'
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps { checkout scm }
+    }
+
+    stage('Install & Test') {
+      steps {
+        sh 'node -v && npm -v'
+        sh 'npm install'
+        sh 'npm test'
+      }
+    }
+
+    stage('Build Docker Image') {
+      steps {
+        sh 'docker build -t $IMAGE_NAME:$IMAGE_TAG -t $IMAGE_NAME:latest .'
+      }
+    }
+
+    stage('Push to Docker Hub') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                          usernameVariable: 'DH_USER',
+                                          passwordVariable: 'DH_PASS')]) {
+          sh 'echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin'
+          sh 'docker push $IMAGE_NAME:$IMAGE_TAG'
+          sh 'docker push $IMAGE_NAME:latest'
+        }
+      }
+    }
+
+    stage('Detect Stable / Canary Environment') {
+      steps {
+        script {
+          def live = sh(returnStdout: true,
+                        script: 'docker exec nginx-proxy cat /etc/nginx/active.inc').trim()
+          env.LIVE = live.contains('app-blue') ? 'blue' : 'green'
+          env.IDLE = (env.LIVE == 'blue') ? 'green' : 'blue'
+          env.IDLE_PORT = (env.IDLE == 'blue') ? '3001' : '3002'
+          echo "STABLE = ${env.LIVE}, deploying canary to ${env.IDLE}"
+        }
+      }
+    }
+
+    stage('Deploy Canary Container') {
+      steps {
+        sh '''
+          docker rm -f app-$IDLE || true
+          docker run -d --name app-$IDLE --network $NETWORK -p $IDLE_PORT:3000 \
+            -e APP_COLOR=$IDLE -e APP_VERSION=$IMAGE_TAG \
+            $IMAGE_NAME:$IMAGE_TAG
+        '''
+      }
+    }
+
+    stage('Health Check Canary') {
+      steps {
+        sh '''
+          for i in $(seq 1 15); do
+            if docker exec app-$IDLE wget -qO- http://localhost:3000/health | grep -q UP; then
+              echo "app-$IDLE is healthy"; exit 0
+            fi
+            echo "waiting for app-$IDLE ($i/15)..."; sleep 2
+          done
+          echo "app-$IDLE failed health check"; exit 1
+        '''
+      }
+    }
+
+    stage('Canary 10%') {
+      steps {
+        sh 'sh ./canary.sh $LIVE $IDLE 10'
+        sh '''
+          for i in $(seq 1 50); do curl -s http://localhost:8081/health; echo; done | grep -o '"color":"[a-z]*"' | sort | uniq -c
+        '''
+        input message: "Canary (${env.IDLE}) is getting ~10% of traffic. Healthy? Increase to 50%?"
+      }
+    }
+
+    stage('Canary 50%') {
+      steps {
+        sh 'sh ./canary.sh $LIVE $IDLE 50'
+        sh '''
+          for i in $(seq 1 50); do curl -s http://localhost:8081/health; echo; done | grep -o '"color":"[a-z]*"' | sort | uniq -c
+        '''
+        input message: "Canary (${env.IDLE}) is getting ~50% of traffic. Promote to 100%?"
+      }
+    }
+
+    stage('Promote to 100%') {
+      steps {
+        sh 'sh ./switch.sh $IDLE'
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "SUCCESS: ${env.IDLE} promoted to 100%. ${env.LIVE} kept for rollback."
+    }
+    unsuccessful {
+      script {
+        if (env.LIVE) { sh 'sh ./switch.sh $LIVE' }
+      }
+      echo "Canary rolled back: 100% of traffic is back on ${env.LIVE}."
+    }
+  }
+}

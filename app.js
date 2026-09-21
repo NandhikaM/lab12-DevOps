@@ -12,7 +12,7 @@ app.get('/', (req, res) => {
 <body style="margin:0;font-family:sans-serif;background:${bg};color:#fff;
              display:flex;align-items:center;justify-content:center;height:100vh">
   <div style="text-align:center">
-    <h1>${COLOR.toUpperCase()} new environment</h1>
+    <h1>${COLOR.toUpperCase()} new environment 21/09</h1>
     <h2>Version: ${VERSION}</h2>
     <p>Served by: ${require('os').hostname()}</p>
   </div>
